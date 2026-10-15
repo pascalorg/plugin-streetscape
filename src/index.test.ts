@@ -238,6 +238,12 @@ describe('Streetscape plugin manifest', () => {
 		expect(regionalMigration({ edges: {} })).toMatchObject({
 			regionalPack: 'right-driving',
 		})
+		const connectivityMigration = (roadNetworkDefinition as unknown as {
+			migrate: Record<number, (value: unknown) => unknown>
+		}).migrate[33]!
+		expect(connectivityMigration({ edges: {} })).toMatchObject({
+			osmLaneConnectivity: [],
+		})
   })
 
   test('shows only visual road controls in the inspector', () => {
@@ -360,7 +366,7 @@ describe('Streetscape plugin manifest', () => {
     useStreetscapeStore.getState().setRoadAlignmentMode('straight')
     expect(alignment?.labels[alignment.value()]).toBe('Alignment: Straight')
     alignment?.cycle()
-    expect(alignment?.labels[alignment.value()]).toBe('Alignment: Spline')
+    expect(alignment?.labels[alignment.value()]).toBe('Alignment: Smooth curve')
 
     useStreetscapeStore.getState().setRoadElevationMode('ground')
     expect(elevation?.labels[elevation.value()]).toBe('Elevation: Ground')
@@ -488,6 +494,15 @@ describe('Streetscape plugin manifest', () => {
       networkId: node.id,
       kind: 'spline',
     })
+    const edgeId = Object.keys(node.edges)[0]!
+    useStreetscapeStore.getState().setRoadElementSelection({
+      networkId: node.id, kind: 'control', id: edgeId, index: 0,
+    })
+    const removeAction = quickActions({ node }).find((action) => action.id === 'road:remove-spline-points')
+    expect(removeAction).toBeDefined()
+    let removed: unknown
+    removeAction!.run({ sceneApi: { update: (_id: unknown, patch: unknown) => { removed = patch } } })
+    expect((removed as RoadNetworkNode).edges[edgeId]?.alignment).toHaveLength(0)
     useStreetscapeStore.getState().setRoadElementSelection(null)
   })
 
@@ -919,7 +934,7 @@ describe('Streetscape plugin manifest', () => {
     store.setRoadAutoInfrastructureItem('streetscape:fire-hydrant', true)
   })
 
-  test('separates roads, lighting, signs, and utility assets into panel categories', () => {
+  test('separates roads, lighting, signs, utilities, and map import into panel categories', () => {
     expect(useStreetscapeStore.getState().panelCategory).toBe('roads')
     useStreetscapeStore.getState().setPanelCategory('roads')
     expect(useStreetscapeStore.getState().panelCategory).toBe('roads')
@@ -927,6 +942,8 @@ describe('Streetscape plugin manifest', () => {
     expect(useStreetscapeStore.getState().panelCategory).toBe('signs')
     useStreetscapeStore.getState().setPanelCategory('utilities')
     expect(useStreetscapeStore.getState().panelCategory).toBe('utilities')
+    useStreetscapeStore.getState().setPanelCategory('map')
+    expect(useStreetscapeStore.getState().panelCategory).toBe('map')
     useStreetscapeStore.getState().setPanelCategory('lighting')
     expect(useStreetscapeStore.getState().postTopLightOn).toBe(false)
     expect(useStreetscapeStore.getState().heritageCrookLightOn).toBe(false)

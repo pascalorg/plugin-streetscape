@@ -7,10 +7,12 @@ import {
 	roadControlPointAffordance,
 	roadCurbCornerAffordance,
 	roadExtendEndpointAffordance,
+	roadInsertPointAffordance,
 	roadNodePointAffordance,
 } from "./road-network-affordances";
 import { buildRoadNetworkFloorplan } from "./road-network-floorplan";
 import { roadNetworkParametrics } from "./road-network-parametrics";
+import { deleteRoadSplinePoints } from "./road-network-spline-handles";
 import {
 	createDefaultRoadStyle,
 	incidentRoadEdges,
@@ -29,7 +31,7 @@ type RoadNetworkDefinition = NodeDefinition<typeof RoadNetworkNode> &
 
 export const roadNetworkDefinition: RoadNetworkDefinition = {
 	kind: "streetscape:road-network",
-	schemaVersion: 33,
+	schemaVersion: 34,
 	schema: RoadNetworkNode,
 	category: "structure",
 	snapProfile: "structural",
@@ -408,6 +410,16 @@ export const roadNetworkDefinition: RoadNetworkDefinition = {
 				roadsideItemSuppressed: {},
 			};
 		},
+		33: (old: unknown) => {
+			if (!(old && typeof old === "object")) return old;
+			const previous = old as Record<string, unknown>;
+			return {
+				...previous,
+				osmLaneConnectivity: Array.isArray(previous.osmLaneConnectivity)
+					? previous.osmLaneConnectivity
+					: [],
+			};
+		},
 	},
 	defaults: () => ({
 		object: "node",
@@ -426,6 +438,9 @@ export const roadNetworkDefinition: RoadNetworkDefinition = {
 		roadsideItemSuppressed: {},
 		attachments: {},
 		junctions: {},
+		osmMappedSurfaces: [],
+		osmCrossings: [],
+		osmLaneConnectivity: [],
 		stylePresets: { ...DEFAULT_ROAD_STYLE_PRESETS },
 		activeStyleId: defaultStyle.id,
 		applyStyleToAll: true,
@@ -454,6 +469,7 @@ export const roadNetworkDefinition: RoadNetworkDefinition = {
 	floorplan: buildRoadNetworkFloorplan,
 	floorplanAffordances: {
 		"road-control-point": roadControlPointAffordance,
+		"road-insert-point": roadInsertPointAffordance,
 		"road-curb-corner": roadCurbCornerAffordance,
 		"road-extend-endpoint": roadExtendEndpointAffordance,
 		"road-node-point": roadNodePointAffordance,
@@ -489,7 +505,26 @@ export const roadNetworkDefinition: RoadNetworkDefinition = {
 					},
 				}
 			: null;
-		const editingActions = [splineAction].filter(
+		const selectedControl = selected?.networkId === node.id && selected.kind === "control" ? selected : null;
+		const controlIndices = selectedControl?.indices ??
+			(selectedControl?.index === undefined ? [] : [selectedControl.index]);
+		const removeControlAction = selectedControl &&
+			deleteRoadSplinePoints(node, selectedControl.id, controlIndices)
+			? {
+					id: "road:remove-spline-points",
+					label: controlIndices.length > 1 ? "Remove selected points" : "Remove selected point",
+					title: "Remove selected spline control points while keeping the road endpoints",
+					icon: { kind: "iconify" as const, name: "lucide:minus-circle" },
+					history: "single" as const,
+					run: ({ sceneApi }: { sceneApi: { update: (id: AnyNodeId, patch: Partial<AnyNode>) => void } }) => {
+						const patch = deleteRoadSplinePoints(node, selectedControl.id, controlIndices);
+						if (patch) sceneApi.update(node.id as AnyNodeId, patch as Partial<AnyNode>);
+						useStreetscapeStore.getState().setRoadElementSelection({ networkId: node.id, kind: "spline", id: node.id });
+						return { selectedIds: [node.id as AnyNodeId] };
+					},
+				}
+			: null;
+		const editingActions = [splineAction, removeControlAction].filter(
 			(action): action is NonNullable<typeof action> => Boolean(action),
 		);
 		const selectedJunctionId =
@@ -736,6 +771,7 @@ export const roadNetworkDefinition: RoadNetworkDefinition = {
 		{ key: "Left click", label: "Add road or spline point" },
 		{ key: "Enter", label: "Finish current road" },
 		{ key: "Double click", label: "Finish current road" },
+		{ key: "Backspace", label: "Remove last draft point" },
 		{
 			key: "C",
 			label: "Alignment",
@@ -751,7 +787,7 @@ export const roadNetworkDefinition: RoadNetworkDefinition = {
 				},
 				labels: {
 					straight: "Alignment: Straight",
-					spline: "Alignment: Spline",
+					spline: "Alignment: Smooth curve",
 				},
 				icons: {
 					straight: "lucide:minus",

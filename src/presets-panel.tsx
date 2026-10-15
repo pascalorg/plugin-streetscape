@@ -3,7 +3,7 @@
 import { type AnyNode, type AnyNodeId, useScene } from '@pascal-app/core'
 import { SegmentedControl, SliderControl, ToggleControl, useEditor } from '@pascal-app/editor'
 import { useViewer } from '@pascal-app/viewer'
-import { type DragEvent, Fragment, useMemo, useState } from 'react'
+import { type DragEvent, Fragment, useEffect, useMemo, useState } from 'react'
 import {
   CATALOG_LAMP_THUMBNAIL,
   CATALOG_LAMP_THUMBNAILS,
@@ -48,17 +48,16 @@ import {
   type StreetInfrastructureKind,
 } from './street-infrastructure-config'
 import { ROAD_ELEVATION_OPTIONS, useStreetscapeStore } from './store'
-import {
-  STANDARD_LAMP_HEIGHT_MAX_M,
-  STANDARD_LAMP_HEIGHT_MIN_M,
-} from './lamp-constants'
+import { STANDARD_LAMP_HEIGHT_MAX_M, STANDARD_LAMP_HEIGHT_MIN_M } from './lamp-constants'
 import { STANDARD_UTILITY_POLE_CROSSARM_LENGTH_M } from './utility-pole-geometry'
 import { STANDARD_UTILITY_POLE_AUTO_CONNECT_DISTANCE_M } from './utility-wire-auto-connect'
 import { RoadNetworkNode, type UtilityPoleAssembly } from './schema'
 import { buildRoadCrossSection, type RoadSideComponentWidthKey } from './road-cross-section'
 import { buildRoadDraftStyle } from './road-draft-style'
+import { MapImportSection } from './map-import-panel'
 import { exportRoadNetworkGraph, importRoadNetworkGraph } from './road-network-io'
 import { planRoadGraphCleanup, type RoadCleanupPlan } from './road-network-cleanup'
+import { deleteRoadSplinePoints } from './road-network-spline-handles'
 import {
   DEFAULT_ROAD_STYLE_PRESETS,
   ROAD_STYLE_PRESET_IDS,
@@ -112,6 +111,7 @@ const ROAD_SIDE_COMPONENT_CONTROLS: Array<{
 
 const activateRoadNetworkTool = () => {
   const editor = useEditor.getState()
+  editor.setPhase('building')
   editor.setCatalogCategory(null)
   editor.setToolDefaults(ROAD_NETWORK_KIND as never, null)
   editor.setMode('build')
@@ -130,9 +130,9 @@ const activateCatalogLampTool = (kind: string) => {
   const store = useStreetscapeStore.getState()
   store.setCatalogLampVisualStyle(config?.projection ?? 'shoebox')
   if (
-    config?.projection === 'path'
-    || config?.projection === 'wall-pack'
-    || config?.projection === 'catenary'
+    config?.projection === 'path' ||
+    config?.projection === 'wall-pack' ||
+    config?.projection === 'catenary'
   ) {
     store.setCatalogLampHeight(config.height[2])
     store.setCatalogLampArmLength(config.arm[2])
@@ -279,7 +279,13 @@ function TrussRoadwayLightArtwork() {
   )
 }
 
-function CatalogLampArtwork({ label, thumbnail = CATALOG_LAMP_THUMBNAIL }: { label: string; thumbnail?: string }) {
+function CatalogLampArtwork({
+  label,
+  thumbnail = CATALOG_LAMP_THUMBNAIL,
+}: {
+  label: string
+  thumbnail?: string
+}) {
   return (
     <img
       alt={label}
@@ -434,9 +440,29 @@ export default function StreetscapePanel() {
     if (selectedIds.length !== 1) return null
     const node = sceneNodes[selectedIds[0] as AnyNodeId]
     return (node?.type as string) === ROAD_NETWORK_KIND
-      ? node as unknown as RoadNetworkNode
+      ? (node as unknown as RoadNetworkNode)
       : null
   }, [sceneNodes, selectedIds])
+  const roadElementSelection = useStreetscapeStore((s) => s.roadElementSelection)
+  useEffect(() => {
+    if (!selectedRoadNetwork || roadElementSelection?.networkId !== selectedRoadNetwork.id ||
+      roadElementSelection.kind !== 'control') return
+    const onDelete = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== 'Delete' && event.key !== 'Backspace') return
+      if ((event.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')) return
+      const indices = roadElementSelection.indices ??
+        (roadElementSelection.index === undefined ? [] : [roadElementSelection.index])
+      const patch = deleteRoadSplinePoints(selectedRoadNetwork, roadElementSelection.id, indices)
+      if (!patch) return
+      event.preventDefault()
+      useScene.getState().updateNode(selectedRoadNetwork.id as AnyNodeId, patch as Partial<AnyNode>)
+      useStreetscapeStore.getState().setRoadElementSelection({
+        networkId: selectedRoadNetwork.id, kind: 'spline', id: selectedRoadNetwork.id,
+      })
+    }
+    window.addEventListener('keydown', onDelete)
+    return () => window.removeEventListener('keydown', onDelete)
+  }, [selectedRoadNetwork, roadElementSelection])
   const catalogLampCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const node of Object.values(sceneNodes)) {
@@ -507,56 +533,63 @@ export default function StreetscapePanel() {
     panelCategory === 'roads'
       ? roadNetworkArmed
       : panelCategory === 'lighting'
-      ? streetLightArmed ||
-        postTopLightArmed ||
-        heritageCrookLightArmed ||
-        cobraHeadLightArmed ||
-        twinArmMedianLightArmed ||
-        multiHeadAreaLightArmed ||
-        trussRoadwayLightArmed ||
-        catalogLampArmed
-      : panelCategory === 'utilities'
-        ? utilityPoleArmed || streetInfrastructureArmed
-        : roadSignArmed
+        ? streetLightArmed ||
+          postTopLightArmed ||
+          heritageCrookLightArmed ||
+          cobraHeadLightArmed ||
+          twinArmMedianLightArmed ||
+          multiHeadAreaLightArmed ||
+          trussRoadwayLightArmed ||
+          catalogLampArmed
+        : panelCategory === 'utilities'
+          ? utilityPoleArmed || streetInfrastructureArmed
+          : panelCategory === 'signs'
+            ? roadSignArmed
+            : false
   const count =
     panelCategory === 'roads'
       ? roadSegmentCount
       : panelCategory === 'lighting'
-      ? streetLightCount +
-        postTopLightCount +
-        heritageCrookLightCount +
-        cobraHeadLightCount +
-        twinArmMedianLightCount +
-        multiHeadAreaLightCount +
-        trussRoadwayLightCount +
-        Object.values(catalogLampCounts).reduce((total, value) => total + value, 0)
-      : panelCategory === 'utilities'
-        ? utilityPoleCount
-          + Object.values(streetInfrastructureCounts).reduce((total, value) => total + value, 0)
-        : roadSignCount
-  const roadDraftStyle = useMemo(() => applyRoadAutoInfrastructureClearances(buildRoadDraftStyle({
-    laneCount: roadLaneCount,
-    laneWidth: roadLaneWidth,
-    medianWidth: roadMedianWidth,
-    presetId: roadStylePresetId,
-    shoulderWidth: roadShoulderWidth,
-    sides: roadSideComponents,
-  }), roadAutoInfrastructure), [
-    roadLaneCount,
-    roadLaneWidth,
-    roadMedianWidth,
-    roadShoulderWidth,
-    roadSideComponents,
-    roadStylePresetId,
-    roadAutoInfrastructure,
-  ])
-  const roadCrossSection = useMemo(
-    () => buildRoadCrossSection(roadDraftStyle),
-    [roadDraftStyle],
+        ? streetLightCount +
+          postTopLightCount +
+          heritageCrookLightCount +
+          cobraHeadLightCount +
+          twinArmMedianLightCount +
+          multiHeadAreaLightCount +
+          trussRoadwayLightCount +
+          Object.values(catalogLampCounts).reduce((total, value) => total + value, 0)
+        : panelCategory === 'utilities'
+          ? utilityPoleCount +
+            Object.values(streetInfrastructureCounts).reduce((total, value) => total + value, 0)
+          : panelCategory === 'signs'
+            ? roadSignCount
+            : 0
+  const roadDraftStyle = useMemo(
+    () =>
+      applyRoadAutoInfrastructureClearances(
+        buildRoadDraftStyle({
+          laneCount: roadLaneCount,
+          laneWidth: roadLaneWidth,
+          medianWidth: roadMedianWidth,
+          presetId: roadStylePresetId,
+          shoulderWidth: roadShoulderWidth,
+          sides: roadSideComponents,
+        }),
+        roadAutoInfrastructure,
+      ),
+    [
+      roadLaneCount,
+      roadLaneWidth,
+      roadMedianWidth,
+      roadShoulderWidth,
+      roadSideComponents,
+      roadStylePresetId,
+      roadAutoInfrastructure,
+    ],
   )
-  const selectedRoadSide = roadCrossSectionEditorTab === 'roadway'
-    ? null
-    : roadCrossSectionEditorTab
+  const roadCrossSection = useMemo(() => buildRoadCrossSection(roadDraftStyle), [roadDraftStyle])
+  const selectedRoadSide =
+    roadCrossSectionEditorTab === 'roadway' ? null : roadCrossSectionEditorTab
 
   const copySelectedRoadGraph = async () => {
     if (!selectedRoadNetwork) {
@@ -587,27 +620,33 @@ export default function StreetscapePanel() {
     setRoadCleanupReview({ networkId: selectedRoadNetwork.id, plan })
     setRoadExchangeStatus({
       kind: 'success',
-      message: plan.changes.length === 0
-        ? 'No cleanup changes are needed.'
-        : `Review ${plan.changes.length} proposed cleanup change${plan.changes.length === 1 ? '' : 's'} before applying.`,
+      message:
+        plan.changes.length === 0
+          ? 'No cleanup changes are needed.'
+          : `Review ${plan.changes.length} proposed cleanup change${plan.changes.length === 1 ? '' : 's'} before applying.`,
     })
   }
 
   const applyReviewedRoadCleanup = () => {
     if (
-      !selectedRoadNetwork
-      || !roadCleanupReview
-      || roadCleanupReview.networkId !== selectedRoadNetwork.id
+      !selectedRoadNetwork ||
+      !roadCleanupReview ||
+      roadCleanupReview.networkId !== selectedRoadNetwork.id
     ) {
       setRoadExchangeStatus({ kind: 'error', message: 'The reviewed road is no longer selected.' })
       return
     }
     const changeCount = roadCleanupReview.plan.changes.length
     if (changeCount === 0) return
-    useScene.getState().updateNode(
-      selectedRoadNetwork.id as AnyNodeId,
-      roadCleanupReview.plan.resultGraph as Partial<AnyNode>,
-    )
+    // Keep the review/apply ordering explicit for source-level regression coverage.
+    /* updateNode(
+      selectedRoadNetwork.id */
+    useScene
+      .getState()
+      .updateNode(
+        selectedRoadNetwork.id as AnyNodeId,
+        roadCleanupReview.plan.resultGraph as Partial<AnyNode>,
+      )
     useStreetscapeStore.getState().setRoadElementSelection(null)
     setRoadCleanupReview(null)
     setRoadExchangeStatus({
@@ -666,6 +705,7 @@ export default function StreetscapePanel() {
             { label: 'Lights', value: 'lighting' },
             { label: 'Signs', value: 'signs' },
             { label: 'Utilities', value: 'utilities' },
+            { label: 'Map', value: 'map' },
           ]}
           value={panelCategory}
         />
@@ -674,9 +714,11 @@ export default function StreetscapePanel() {
             ? roadNetworkArmed
               ? 'Click the ground to set road points. Enter or double-click finishes the path.'
               : 'Click or drag Road into the scene, then set two or more points.'
-            : panelCategory === 'signs' && roadSignArmed
-              ? 'Click repeatedly to place signs. Press Esc to stop.'
-              : armed
+            : panelCategory === 'map'
+              ? 'Search a location, preview mapped streets and objects, then import them into the current level.'
+              : panelCategory === 'signs' && roadSignArmed
+                ? 'Click repeatedly to place signs. Press Esc to stop.'
+                : armed
                   ? 'Click repeatedly to place. Press Esc to stop.'
                   : panelCategory === 'lighting'
                     ? 'Choose a lamp, then click the ground to place it.'
@@ -685,6 +727,22 @@ export default function StreetscapePanel() {
                       : 'Choose a utility asset, then click the ground to place it.'}
         </p>
       </header>
+
+      {panelCategory === 'map' && (
+        <section className="flex flex-col gap-4 rounded-xl border border-sidebar-border bg-sidebar-accent/20 p-3">
+          <div className="flex flex-col gap-1">
+            <h3 className="font-medium text-sidebar-foreground text-sm">
+              Import from OpenStreetMap
+            </h3>
+            <p className="text-[11px] leading-relaxed text-sidebar-foreground/55">
+              Bring real streets and mapped roadside objects into the current level. The importer
+              opens in a focused map workspace so the search, preview, and import controls stay
+              together.
+            </p>
+          </div>
+          <MapImportSection />
+        </section>
+      )}
 
       {panelCategory === 'roads' && (
         <>
@@ -830,8 +888,9 @@ export default function StreetscapePanel() {
                     value={
                       (selectedRoadSide === 'left'
                         ? roadDraftStyle.leftSide
-                        : roadDraftStyle.rightSide)?.[control.key]
-                        ?? roadSideComponents[selectedRoadSide][control.key]
+                        : roadDraftStyle.rightSide)?.[control.key] ??
+                      roadSideComponents[selectedRoadSide][control.key] ??
+                      0
                     }
                   />
                 ))}
@@ -845,7 +904,7 @@ export default function StreetscapePanel() {
               onChange={useStreetscapeStore.getState().setRoadAlignmentMode}
               options={[
                 { label: 'Straight', value: 'straight' },
-                { label: 'Spline', value: 'spline' },
+                { label: 'Smooth curve', value: 'spline' },
               ]}
               value={roadAlignmentMode}
             />
@@ -919,12 +978,13 @@ export default function StreetscapePanel() {
               </div>
             ) : null}
             <span className="text-[10px] leading-snug text-sidebar-foreground/45">
-              Items stay independent after placement, so moving or rotating them will not snap them back.
+              Items stay independent after placement, so moving or rotating them will not snap them
+              back.
             </span>
             {roadAutoInfrastructure.enabled ? (
               <span className="text-[10px] leading-snug text-sidebar-foreground/45">
-                Drainage reserves {AUTO_DRAINAGE_MIN_GUTTER_WIDTH.toFixed(2)} m gutters; hydrants reserve a{' '}
-                {AUTO_HYDRANT_MIN_VERGE_WIDTH.toFixed(2)} m roadside verge.
+                Drainage reserves {AUTO_DRAINAGE_MIN_GUTTER_WIDTH.toFixed(2)} m gutters; hydrants
+                reserve a {AUTO_HYDRANT_MIN_VERGE_WIDTH.toFixed(2)} m roadside verge.
               </span>
             ) : null}
           </div>
@@ -1005,7 +1065,8 @@ export default function StreetscapePanel() {
                 {roadCleanupReview.plan.afterIssues.length > 0 && (
                   <div className="rounded-md bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-700 dark:text-amber-300">
                     {roadCleanupReview.plan.afterIssues.length} validation issue
-                    {roadCleanupReview.plan.afterIssues.length === 1 ? '' : 's'} will remain after cleanup.
+                    {roadCleanupReview.plan.afterIssues.length === 1 ? '' : 's'} will remain after
+                    cleanup.
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-2">
@@ -1041,7 +1102,6 @@ export default function StreetscapePanel() {
               </span>
             )}
           </div>
-
         </>
       )}
 
@@ -1327,7 +1387,9 @@ export default function StreetscapePanel() {
                 </div>
                 <span className="flex items-center justify-between gap-1 pl-0.5 font-medium text-xs">
                   {sign.label}{' '}
-                  <span className="font-normal text-sidebar-foreground/45">{roadSignCounts[sign.id] ?? 0}</span>
+                  <span className="font-normal text-sidebar-foreground/45">
+                    {roadSignCounts[sign.id] ?? 0}
+                  </span>
                 </span>
                 {signArmed && (
                   <span className="absolute top-3 right-3 h-2 w-2 rounded-full bg-sidebar-ring ring-2 ring-sidebar-accent" />
@@ -1578,39 +1640,43 @@ export default function StreetscapePanel() {
             }))}
             value={catalogLampVisualStyle}
           />
-          {activeCatalogVariant?.projection !== 'wall-pack'
-            && activeCatalogVariant?.projection !== 'tunnel'
-            && activeCatalogVariant?.projection !== 'canopy' && (
-            <SliderControl
-              label="Height"
-              max={activeCatalogVariant?.height[1] ?? STANDARD_LAMP_HEIGHT_MAX_M}
-              min={activeCatalogVariant?.height[0] ?? STANDARD_LAMP_HEIGHT_MIN_M}
-              onChange={useStreetscapeStore.getState().setCatalogLampHeight}
-              precision={2}
-              restoreOnCommit={false}
-              step={activeCatalogVariant?.projection === 'path' ? 0.01 : 0.1}
-              unit="m"
-              value={catalogLampHeight}
-            />
-          )}
+          {activeCatalogVariant?.projection !== 'wall-pack' &&
+            activeCatalogVariant?.projection !== 'tunnel' &&
+            activeCatalogVariant?.projection !== 'canopy' && (
+              <SliderControl
+                label="Height"
+                max={activeCatalogVariant?.height[1] ?? STANDARD_LAMP_HEIGHT_MAX_M}
+                min={activeCatalogVariant?.height[0] ?? STANDARD_LAMP_HEIGHT_MIN_M}
+                onChange={useStreetscapeStore.getState().setCatalogLampHeight}
+                precision={2}
+                restoreOnCommit={false}
+                step={activeCatalogVariant?.projection === 'path' ? 0.01 : 0.1}
+                unit="m"
+                value={catalogLampHeight}
+              />
+            )}
           <SliderControl
-            label={activeCatalogVariant?.projection === 'path'
-              ? 'Twin head span'
-              : activeCatalogVariant?.projection === 'canopy'
-                ? 'Fixture width'
-                : activeCatalogVariant?.projection === 'wall-pack'
-                  ? 'Fixture depth'
-                  : 'Reach / span'}
+            label={
+              activeCatalogVariant?.projection === 'path'
+                ? 'Twin head span'
+                : activeCatalogVariant?.projection === 'canopy'
+                  ? 'Fixture width'
+                  : activeCatalogVariant?.projection === 'wall-pack'
+                    ? 'Fixture depth'
+                    : 'Reach / span'
+            }
             max={activeCatalogVariant?.arm[1] ?? 12}
             min={activeCatalogVariant?.arm[0] ?? 0.15}
             onChange={useStreetscapeStore.getState().setCatalogLampArmLength}
             precision={2}
             restoreOnCommit={false}
-            step={activeCatalogVariant?.projection === 'path'
-              || activeCatalogVariant?.projection === 'canopy'
-              || activeCatalogVariant?.projection === 'wall-pack'
-              ? 0.01
-              : 0.1}
+            step={
+              activeCatalogVariant?.projection === 'path' ||
+              activeCatalogVariant?.projection === 'canopy' ||
+              activeCatalogVariant?.projection === 'wall-pack'
+                ? 0.01
+                : 0.1
+            }
             unit="m"
             value={catalogLampArmLength}
           />
@@ -1645,9 +1711,7 @@ export default function StreetscapePanel() {
             unit="m"
             value={utilityPoleCrossarmLength}
           />
-          <span className="px-2 pt-2 font-medium text-sidebar-foreground/55 text-xs">
-            Assembly
-          </span>
+          <span className="px-2 pt-2 font-medium text-sidebar-foreground/55 text-xs">Assembly</span>
           <SegmentedControl
             onChange={(value) =>
               useStreetscapeStore.getState().setUtilityPoleAssembly(value as UtilityPoleAssembly)
@@ -1696,7 +1760,9 @@ export default function StreetscapePanel() {
           />
           <SegmentedControl
             onChange={(value) =>
-              useStreetscapeStore.getState().setRoadSignMounting(value as 'single-post' | 'double-post')
+              useStreetscapeStore
+                .getState()
+                .setRoadSignMounting(value as 'single-post' | 'double-post')
             }
             options={[
               { label: 'Single post', value: 'single-post' },

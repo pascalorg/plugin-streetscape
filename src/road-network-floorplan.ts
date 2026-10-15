@@ -2,7 +2,7 @@ import type { FloorplanGeometry, GeometryContext } from '@pascal-app/core'
 import { classifyRoadJunction } from './road-network-topology'
 import { buildRoadCurbCornerHandles } from './road-network-corner-editing'
 import { buildRoadNetworkMarkings } from './road-network-markings'
-import { buildRoadJunctionBands, ROAD_SIDE_COMPONENT_SPECS } from './road-cross-section'
+import { buildRoadJunctionBands, roadCarriagewayWidth, ROAD_SIDE_COMPONENT_SPECS } from './road-cross-section'
 import {
   buildRoadTransitionProfiles,
   type RoadTransitionSample,
@@ -35,10 +35,6 @@ function resolveStyle(node: RoadNetworkNode, edge: RoadGraphEdge): RoadStylePres
       | undefined) ??
     node.stylePresets[node.activeStyleId]
   )
-}
-
-function carriagewayWidth(style: RoadStylePreset): number {
-  return style.laneCount * style.laneWidth + style.shoulderWidth * 2 + style.medianWidth
 }
 
 function profileOffsetPoint(
@@ -155,7 +151,7 @@ export function buildRoadNetworkFloorplan(
         return [{
           angle: Math.atan2(toward[2] - from[2], toward[0] - from[0]),
           edgeId: edge.id,
-          halfWidth: carriagewayWidth(style) / 2,
+          halfWidth: roadCarriagewayWidth(style) / 2,
         }]
       })
       const junction = node.junctions?.[graphNode.id]
@@ -286,6 +282,18 @@ export function buildRoadNetworkFloorplan(
       })
     }
     for (const edge of Object.values(node.edges)) {
+      if (edge.alignment.length > 0) {
+        const samples = sampleRoadEdgePoints(node, edge, Math.max(32, (edge.alignment.length + 1) * 16))
+        for (let index = 0; index <= edge.alignment.length; index += 1) {
+          const t = (index + 0.5) / (edge.alignment.length + 1)
+          const point = samples[Math.round(t * (samples.length - 1))]
+          if (!point) continue
+          children.push({
+            kind: 'midpoint-handle', point: [point[0], point[2]],
+            affordance: 'road-insert-point', payload: { edgeId: edge.id, index, elevation: point[1] },
+          })
+        }
+      }
       edge.alignment.forEach((point, index) => {
         children.push({
           kind: 'endpoint-handle',

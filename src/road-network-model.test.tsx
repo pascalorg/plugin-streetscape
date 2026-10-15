@@ -34,6 +34,28 @@ function renderRoad(node: RoadNetworkNode): string {
   return renderThree(createElement(RoadNetworkModel, { node }))
 }
 
+test('renders imported mapped sidewalk and cycleway geometry', () => {
+  const result = insertRoadSegment(createEmptyRoadGraph(), [0, 0, 0], [20, 0, 0])
+  const edgeId = Object.keys(result.graph.edges)[0]!
+  const node = RoadNetworkNode.parse({
+    ...result.graph,
+    osmMappedSurfaces: [
+      { id: 101, kind: 'sidewalk', tags: { highway: 'footway', width: '2' }, points: [[0, 0, 3], [20, 0, 3]] },
+      { id: 102, kind: 'cycleway', tags: { highway: 'cycleway' }, points: [[0, 0, -3], [20, 0, -3]] },
+    ],
+    osmCrossings: [
+      { id: 103, associatedEdgeId: edgeId, point: [10, 0, 0], tags: { highway: 'crossing', kerb: 'lowered', tactile_paving: 'yes' } },
+      { id: 104, kind: 'kerb', associatedEdgeId: edgeId, point: [10, 0, 3], tags: { barrier: 'kerb', kerb: 'flush' } },
+    ],
+  })
+  const markup = renderRoad(node)
+  expect(markup).toContain('name="road-mapped-sidewalk:101"')
+  expect(markup).toContain('name="road-mapped-cycleway:102"')
+  expect(markup).toContain('name="road-mapped-crossing-ramp:103"')
+  expect(markup).toContain('name="road-mapped-kerb-ramp:104"')
+  expect(markup.match(/name="road-mapped-tactile-pad:103"/g)).toHaveLength(2)
+})
+
 function polygonContains(
   points: readonly (readonly [number, number])[],
   target: readonly [number, number],
@@ -419,9 +441,11 @@ describe('road network corner rendering', () => {
     expect(floorplan.kind).toBe('group')
     if (floorplan.kind !== 'group') return
     const handles = floorplan.children.filter((child) => child.kind === 'endpoint-handle')
+    const insertHandles = floorplan.children.filter((child) => child.kind === 'midpoint-handle' && child.affordance === 'road-insert-point')
     const extensionArrows = floorplan.children.filter((child) => child.kind === 'move-arrow')
     expect(handles.filter((handle) => handle.affordance === 'road-node-point')).toHaveLength(2)
     expect(handles.filter((handle) => handle.affordance === 'road-control-point')).toHaveLength(1)
+    expect(insertHandles).toHaveLength(2)
     expect(extensionArrows).toHaveLength(2)
     expect(extensionArrows.every((arrow) => arrow.affordance === 'road-extend-endpoint')).toBe(true)
   })
@@ -490,4 +514,12 @@ describe('road WebGPU resource lifecycle', () => {
     await Bun.sleep(550)
     expect(disposeCount).toBe(1)
   })
+})
+
+test('renders every captured Times Square junction with the production seam builder', async () => {
+  const node = RoadNetworkNode.parse(await Bun.file(`${import.meta.dir}/__fixtures__/osm-times-square-roads.json`).json())
+  const markup = renderRoad(node)
+  expect(markup.match(/name="road-junction-surface"/g)).toHaveLength(19)
+  expect(markup).toContain('name="road-junction-sidewalk"')
+  expect(markup).toContain('name="road-pavement-body"')
 })

@@ -129,6 +129,8 @@ export const streetscapeHostPanel: PluginHostPanel = {
   defaultInstalled: true,
 }
 
+export { configureMapImportGateway } from './map-data-source'
+
 export {
   CobraHeadLightNode,
   HeritageCrookLightNode,
