@@ -510,7 +510,7 @@ describe('Streetscape plugin manifest', () => {
     expect(streetscapeHostPanel.pluginId).toBe(streetscapePlugin.id)
     expect(streetscapeHostPanel.defaultInstalled).toBe(true)
     expect(streetscapeHostPanel.pluginUrl).toBe(
-      'https://github.com/sudhir9297/streetscape-pascal-plugin',
+      'https://github.com/pascalorg/plugin-streetscape',
     )
   })
 

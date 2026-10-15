@@ -125,7 +125,7 @@ export const streetscapeHostPanel: PluginHostPanel = {
     name: 'Pascal',
     url: 'https://github.com/sudhir9297',
   },
-  pluginUrl: 'https://github.com/sudhir9297/streetscape-pascal-plugin',
+  pluginUrl: 'https://github.com/pascalorg/plugin-streetscape',
   defaultInstalled: true,
 }
 

@@ -6,8 +6,8 @@ configurable assets for roads, lighting, signs, utilities, and roadside
 infrastructure, with a host-side Streetscape panel for placing and editing them.
 
 ```bash
-git clone https://github.com/sudhir9297/streetscape-pascal-plugin.git
-cd streetscape-pascal-plugin
+git clone https://github.com/pascalorg/plugin-streetscape.git
+cd plugin-streetscape
 bun install
 bun run check-types
 bun test
